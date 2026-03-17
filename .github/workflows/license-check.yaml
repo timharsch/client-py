@@ -26,7 +26,7 @@ jobs:
             --entrypoint "" \
             fossology/fossology:scanner \
             /bin/nomossa -J -l -d /opt/repo \
-            > license-report.json 2>scanner-stderr.txt
+            > /tmp/license-report.json 2>/tmp/scanner-stderr.txt
 
       - name: Check licenses against allowlist
         run: |
@@ -35,7 +35,7 @@ jobs:
           import re
           import sys
 
-          with open("license-report.json") as f:
+          with open("/tmp/license-report.json") as f:
               content = f.read()
 
           with open(".github/license-allowlist.txt") as f:
@@ -54,7 +54,7 @@ jobs:
           if json_start == -1:
               print("ERROR: No JSON found in scanner output")
               print("Scanner stderr:")
-              with open("scanner-stderr.txt") as f:
+              with open("/tmp/scanner-stderr.txt") as f:
                   print(f.read())
               sys.exit(1)
 
@@ -118,6 +118,6 @@ jobs:
         with:
           name: fossology-license-report
           path: |
-            license-report.json
-            scanner-stderr.txt
+            /tmp/license-report.json
+            /tmp/scanner-stderr.txt
           retention-days: 30
