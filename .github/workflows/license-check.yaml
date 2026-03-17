@@ -16,13 +16,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pull FOSSology scanner image
+        run: docker pull fossology/fossology:scanner
+
       - name: Run nomos scanner
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/opt/repo" \
-            --entrypoint /bin/nomossa \
             fossology/fossology:scanner \
-            -r /opt/repo -J \
+            /bin/nomossa -r /opt/repo -J \
             > license-report.json 2>scanner-stderr.txt
 
       - name: Check licenses against allowlist
