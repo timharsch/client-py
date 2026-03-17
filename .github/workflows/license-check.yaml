@@ -23,8 +23,9 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/opt/repo" \
+            --entrypoint "" \
             fossology/fossology:scanner \
-            /bin/nomossa -r /opt/repo -J \
+            /bin/nomossa -J -l -d /opt/repo \
             > license-report.json 2>scanner-stderr.txt
 
       - name: Check licenses against allowlist
@@ -82,6 +83,11 @@ jobs:
                   continue
               filepath = entry.get("file", "")
               rel_path = filepath.replace("/opt/repo/", "")
+
+              # Skip non-source directories
+              skip_dirs = (".venv/", ".git/", "__pycache__/", ".egg-info/")
+              if any(rel_path.startswith(d) or f"/{d}" in rel_path for d in skip_dirs):
+                  continue
 
               if rel_path in excludes:
                   continue
