@@ -20,21 +20,19 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/opt/repo" \
-            --entrypoint fossologyscanner \
+            --entrypoint /bin/nomossa \
             fossology/fossology:scanner \
-            nomos scan-dir --dir-path /opt/repo --report TEXT \
-            > license-report.txt 2>scanner-stderr.txt || true
+            -r /opt/repo -J \
+            > license-report.json 2>scanner-stderr.txt
 
       - name: Check licenses against allowlist
         run: |
-          # Parse the JSON-formatted scan results from the TEXT report
-          # Extract file + license pairs, skipping excluded files
           python3 << 'SCRIPT'
           import json
           import re
           import sys
 
-          with open("license-report.txt") as f:
+          with open("license-report.json") as f:
               content = f.read()
 
           with open(".github/license-allowlist.txt") as f:
@@ -43,7 +41,8 @@ jobs:
           with open(".github/license-scan-excludes.txt") as f:
               excludes = set(line.strip() for line in f if line.strip())
 
-          # Find JSON content (skip any FATAL lines)
+          # nomossa -J outputs a JSON object with a "results" array
+          # but FATAL lines may be mixed in — strip them
           lines = content.split('\n')
           json_lines = [l for l in lines if not l.startswith('FATAL')]
           raw = '\n'.join(json_lines)
@@ -51,6 +50,9 @@ jobs:
           json_start = raw.find('{')
           if json_start == -1:
               print("ERROR: No JSON found in scanner output")
+              print("Scanner stderr:")
+              with open("scanner-stderr.txt") as f:
+                  print(f.read())
               sys.exit(1)
 
           raw = raw[json_start:]
@@ -58,7 +60,6 @@ jobs:
           try:
               data = json.loads(raw)
           except json.JSONDecodeError:
-              # Try to extract individual file entries
               entries = re.findall(
                   r'\{[^{}]*"file"[^{}]*"licenses"[^{}]*\[.*?\][^{}]*\}',
                   raw, re.DOTALL
@@ -71,16 +72,15 @@ jobs:
                       pass
 
           results = data.get("results", data) if isinstance(data, dict) else data
+          print(f"Scanned {len(results)} files")
 
           violations = []
           for entry in results:
               if not isinstance(entry, dict):
                   continue
               filepath = entry.get("file", "")
-              # Normalize path (strip /opt/repo/ prefix)
               rel_path = filepath.replace("/opt/repo/", "")
 
-              # Skip excluded files
               if rel_path in excludes:
                   continue
 
@@ -110,6 +110,6 @@ jobs:
         with:
           name: fossology-license-report
           path: |
-            license-report.txt
+            license-report.json
             scanner-stderr.txt
           retention-days: 30
