@@ -1,0 +1,118 @@
+name: License Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: license-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  fossology-scan:
+    name: FOSSology license scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run nomos scanner
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/opt/repo" \
+            --entrypoint fossologyscanner \
+            fossology/fossology:scanner \
+            nomos scan-dir --dir-path /opt/repo --report TEXT \
+            > license-report.txt 2>scanner-stderr.txt || true
+
+      - name: Check licenses against allowlist
+        run: |
+          ALLOWLIST=".github/license-allowlist.txt"
+          EXCLUDES=".github/license-scan-excludes.txt"
+
+          # Parse the JSON-formatted scan results from the TEXT report
+          # Extract file + license pairs, skipping excluded files
+          python3 << 'SCRIPT'
+          import json
+          import re
+          import sys
+
+          with open("license-report.txt") as f:
+              content = f.read()
+
+          with open("$ALLOWLIST") as f:
+              allowlist = set(line.strip() for line in f if line.strip())
+
+          with open("$EXCLUDES") as f:
+              excludes = set(line.strip() for line in f if line.strip())
+
+          # Find JSON content (skip any FATAL lines)
+          lines = content.split('\n')
+          json_lines = [l for l in lines if not l.startswith('FATAL')]
+          raw = '\n'.join(json_lines)
+
+          json_start = raw.find('{')
+          if json_start == -1:
+              print("ERROR: No JSON found in scanner output")
+              sys.exit(1)
+
+          raw = raw[json_start:]
+
+          try:
+              data = json.loads(raw)
+          except json.JSONDecodeError:
+              # Try to extract individual file entries
+              entries = re.findall(
+                  r'\{[^{}]*"file"[^{}]*"licenses"[^{}]*\[.*?\][^{}]*\}',
+                  raw, re.DOTALL
+              )
+              data = {"results": []}
+              for e in entries:
+                  try:
+                      data["results"].append(json.loads(e))
+                  except:
+                      pass
+
+          results = data.get("results", data) if isinstance(data, dict) else data
+
+          violations = []
+          for entry in results:
+              if not isinstance(entry, dict):
+                  continue
+              filepath = entry.get("file", "")
+              # Normalize path (strip /opt/repo/ prefix)
+              rel_path = filepath.replace("/opt/repo/", "")
+
+              # Skip excluded files
+              if rel_path in excludes:
+                  continue
+
+              for lic_entry in entry.get("licenses", []):
+                  lic = lic_entry if isinstance(lic_entry, str) else lic_entry.get("license", "")
+                  if lic and lic not in allowlist:
+                      violations.append((rel_path, lic))
+
+          if violations:
+              print(f"::error::License violations found: {len(violations)}")
+              print("")
+              print("| File | License |")
+              print("|------|---------|")
+              for filepath, lic in sorted(set(violations)):
+                  print(f"| {filepath} | {lic} |")
+              print("")
+              print("Add the license to .github/license-allowlist.txt if permitted,")
+              print("or add the file to .github/license-scan-excludes.txt if it is a false positive.")
+              sys.exit(1)
+          else:
+              print("All detected licenses are on the allowlist. Scan passed.")
+          SCRIPT
+
+      - name: Upload scan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fossology-license-report
+          path: |
+            license-report.txt
+            scanner-stderr.txt
+          retention-days: 30
